@@ -119,14 +119,21 @@ def update_chat_progress(conn, tu_id, ru_id, *, backfilled=None, oldest_message_
 
 
 def insert_messages(conn, rows) -> int:
+    """UPSERT, не INSERT OR IGNORE - если сообщение уже было сохранено
+    (например, до того как клиент его удалил), повторная докачка должна
+    обновить content_json/kind на актуальные, а не оставлять устаревшую
+    копию навсегда (иначе text="deleted" никогда не долетит до базы)."""
     if not rows:
         return 0
     before = conn.total_changes
     conn.executemany(
         """
-        INSERT OR IGNORE INTO messages
+        INSERT INTO messages
             (message_id, tu_id, ru_id, ru_name, author, kind, created_date, content_json)
         VALUES (:message_id, :tu_id, :ru_id, :ru_name, :author, :kind, :created_date, :content_json)
+        ON CONFLICT(message_id) DO UPDATE SET
+            kind = excluded.kind,
+            content_json = excluded.content_json
         """,
         rows,
     )
