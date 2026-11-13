@@ -8,6 +8,7 @@ FAIL_THRESHOLD_MIN минут. Если долго молчит КЛИЕНТ - �
 границы смены/дня. Сам фейл относим к дню/смене того момента, когда
 клиент написал (не когда "протух" таймер).
 """
+import json
 from datetime import datetime, timezone
 
 API_DATE_FMT = "%Y-%m-%dT%H:%M:%S.%fZ"
@@ -19,6 +20,15 @@ NON_MESSAGE_KINDS = {"like", "wink"}
 
 def _parse(dt_str: str) -> datetime:
     return datetime.strptime(dt_str, API_DATE_FMT).replace(tzinfo=timezone.utc)
+
+
+def _is_deleted(content_json: str) -> bool:
+    """Клиент написал и тут же удалил сообщение - API отдаёт text="deleted".
+    Отвечать физически не на что, это не настоящее сообщение."""
+    try:
+        return json.loads(content_json).get("text") == "deleted"
+    except (TypeError, ValueError):
+        return False
 
 
 def compute_fails(conn, window_start: str, window_end: str, now: datetime = None):
@@ -44,7 +54,7 @@ def compute_fails(conn, window_start: str, window_end: str, now: datetime = None
     for tu_id, ru_id in pairs:
         rows = conn.execute(
             """
-            SELECT author, created_date, ru_name, kind FROM messages
+            SELECT author, created_date, ru_name, kind, content_json FROM messages
             WHERE tu_id = ? AND ru_id = ?
             ORDER BY created_date
             """,
@@ -53,10 +63,10 @@ def compute_fails(conn, window_start: str, window_end: str, now: datetime = None
         ru_name = next((r[2] for r in rows if r[2]), str(ru_id))
 
         pending_since = None
-        for author, created_date, _, kind in rows:
+        for author, created_date, _, kind, content_json in rows:
             if author == "ru":
-                if kind in NON_MESSAGE_KINDS:
-                    continue  # лайк/подмигивание - не считается сообщением
+                if kind in NON_MESSAGE_KINDS or _is_deleted(content_json):
+                    continue  # лайк/подмигивание/удалённое - не считается сообщением
                 if pending_since is None:
                     pending_since = created_date
             elif author == "tu":
