@@ -7,3 +7,4 @@ storage_state.json
 .env
 tracking_start.json
 diagnose_dump.json
+task_tracking_start.json

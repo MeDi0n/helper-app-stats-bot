@@ -31,21 +31,26 @@ from db import (
 
 API_DATE_FMT = "%Y-%m-%dT%H:%M:%S.%fZ"
 TRACKING_START_PATH = Path(__file__).parent / "tracking_start.json"
+TASK_TRACKING_START_PATH = Path(__file__).parent / "task_tracking_start.json"
 BACKFILL_PAGE_CAP = 15
 REQUEST_DELAY_SEC = 0.3
 
 
-def _get_tracking_start() -> str:
-    if TRACKING_START_PATH.exists():
-        return json.loads(TRACKING_START_PATH.read_text(encoding="utf-8"))["cutoff"]
+def _get_tracking_start(path: Path) -> str:
+    if path.exists():
+        return json.loads(path.read_text(encoding="utf-8"))["cutoff"]
     today_local = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
     today_utc = today_local.astimezone().astimezone(timezone.utc)
     cutoff = today_utc.strftime(API_DATE_FMT)[:-3] + "Z"  # мс до 3 знаков
-    TRACKING_START_PATH.write_text(json.dumps({"cutoff": cutoff}), encoding="utf-8")
+    path.write_text(json.dumps({"cutoff": cutoff}), encoding="utf-8")
     return cutoff
 
 
-BACKFILL_CUTOFF = _get_tracking_start()
+BACKFILL_CUTOFF = _get_tracking_start(TRACKING_START_PATH)
+# Задачи (лайки/премиум/лимиты) - отдельная, более узкая дата отсечения:
+# фиксируется в свой момент (день первого запуска этой фичи), а не
+# привязана к дате отсечения сообщений.
+TASK_BACKFILL_CUTOFF = _get_tracking_start(TASK_TRACKING_START_PATH)
 
 
 def _now_iso() -> str:
@@ -170,10 +175,10 @@ def discover_tasks(sess, conn, log=print):
             items, cursor = fetch_tasks_page(sess, sub_types=[sub_type], cursor=cursor, limit=50)
             if not items:
                 break
-            rows = [_task_to_row(t) for t in items]
+            rows = [_task_to_row(t) for t in items if t.get("taskAt", "") >= TASK_BACKFILL_CUTOFF]
             total_new += insert_tasks(conn, rows)
             oldest_task_at = items[-1].get("taskAt", "")
-            if oldest_task_at < BACKFILL_CUTOFF or not cursor:
+            if oldest_task_at < TASK_BACKFILL_CUTOFF or not cursor:
                 break
             time.sleep(REQUEST_DELAY_SEC)
         conn.commit()
