@@ -30,7 +30,9 @@ def fetch_ru_profiles(sess, pairs):
     return r.json().get("results", [])
 
 
-TASK_SUB_TYPES = ["system", "likeOrWink", "likeOrWinkPaidContact", "premiumRuOnline", "vipRuOnline"]
+TASK_SUB_TYPES = ["likeOrWink", "likeOrWinkPaidContact", "premiumRuOnline", "vipRuOnline"]
+# "system" (новые лимиты) намеренно не отслеживаем - сайт не хранит
+# историю закрытых задач, человеку такой фейл нечем доказать задним числом.
 
 
 def fetch_tasks_page(sess, sub_types=None, cursor=None, limit=50):

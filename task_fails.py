@@ -1,8 +1,12 @@
 """
 Фейлы по "задачам" с сайта - отдельно от сообщений: клиент лайкнул/
-подмигнул, зашёл премиум-пользователь, открылся новый лимит. У каждой
-задачи есть свой официальный таймер (timer_ms) с сайта - используем его
-напрямую, ничего не хардкодим.
+подмигнул, зашёл премиум-пользователь. У каждой задачи есть свой
+официальный таймер (timer_ms) с сайта - используем его напрямую, ничего
+не хардкодим.
+
+"Новые лимиты" (system) намеренно не считаем - сайт не хранит историю
+закрытых задач в интерфейсе, человеку такой фейл нечем доказать задним
+числом (см. SKIP_SUB_TYPES).
 
 canceled / cancelByCommunicationBlock - ситуация сама отпала или клиент
 заблокировал анкету, это не вина оператора, не фейл.
@@ -12,9 +16,9 @@ from datetime import datetime, timezone
 API_DATE_FMT = "%Y-%m-%dT%H:%M:%S.%fZ"
 
 SKIP_STATUSES = {"canceled", "cancelByCommunicationBlock"}
+SKIP_SUB_TYPES = {"system"}
 
 SUB_TYPE_LABELS = {
-    "system": "Новый лимит",
     "likeOrWink": "Лайк/подмигивание",
     "likeOrWinkPaidContact": "Платный лайк/подмигивание",
     "premiumRuOnline": "Премиум-онлайн",
@@ -42,9 +46,10 @@ def compute_task_fails(conn, window_start: str, window_end: str, now: datetime =
         LEFT JOIN chats c ON c.tu_id = t.tu_id AND c.ru_id = t.ru_id
         WHERE t.task_at >= ? AND t.task_at < ?
           AND t.status NOT IN ({})
+          AND t.sub_type NOT IN ({})
           AND COALESCE(c.blocked, 0) = 0
-        """.format(",".join("?" * len(SKIP_STATUSES))),
-        (window_start, window_end, *SKIP_STATUSES),
+        """.format(",".join("?" * len(SKIP_STATUSES)), ",".join("?" * len(SKIP_SUB_TYPES))),
+        (window_start, window_end, *SKIP_STATUSES, *SKIP_SUB_TYPES),
     ).fetchall()
 
     fails = []
