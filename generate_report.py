@@ -17,6 +17,7 @@ from db import get_connection
 from report_common import CSS_TOKENS, bar_chart_html, stat_tile, kind_meta, normalize_kind, API_DATE_FMT, shift_bounds_utc
 from config import TU_NAMES, TU_TEAMS
 from fails import compute_fails
+from task_fails import compute_task_fails
 import generate_chat_pages
 
 HERE = Path(__file__).parent
@@ -267,6 +268,30 @@ def _operator_for(team: str, shift_name: str) -> str:
     return parts[idx]
 
 
+def _normalize_message_fails(fail_list):
+    """Добавляет к обычным фейлам (сообщения) общие поля type_label/operator,
+    чтобы рендерить вместе с фейлами по задачам (лайки/премиум/лимиты)."""
+    out = []
+    for f in fail_list:
+        f = dict(f)
+        team = TU_TEAMS.get(f["tu_id"], "?")
+        shift_name = _shift_name_for(f["fail_start"])
+        f["type_label"] = "Сообщение"
+        f["operator"] = _operator_for(team, shift_name)
+        out.append(f)
+    return out
+
+
+def _normalize_task_fails(fail_list):
+    out = []
+    for f in fail_list:
+        f = dict(f)
+        f["type_label"] = f["sub_type_label"]
+        f["operator"] = f["operator_name"]
+        out.append(f)
+    return out
+
+
 def fails_table_html(fail_list) -> str:
     if not fail_list:
         return '<p class="empty">Фейлов не найдено - анкеты отвечали вовремя.</p>'
@@ -279,12 +304,12 @@ def fails_table_html(fail_list) -> str:
         status_class = "muted" if f["status"] == "replied_late" else ""
         team = TU_TEAMS.get(f["tu_id"], "?")
         shift_name = _shift_name_for(f["fail_start"])
-        operator = _operator_for(team, shift_name)
         rows.append(f"""<tr class="failrow team-{_team_slug(team)}">
             <td><a class="row-link" href="{html.escape(chat_href)}">{html.escape(f['ru_name'])}</a></td>
             <td class="muted">{f['ru_id']}</td>
             <td class="muted">{html.escape(TU_NAMES.get(f['tu_id'], str(f['tu_id'])))} ({f['tu_id']})</td>
-            <td>{html.escape(operator)}</td>
+            <td class="muted">{html.escape(f['type_label'])}</td>
+            <td>{html.escape(f['operator'])}</td>
             <td class="muted">{html.escape(shift_name)}</td>
             <td class="muted">{to_local_str(f['fail_start'])}</td>
             <td class="{status_class}">{status_str}</td>
@@ -293,7 +318,7 @@ def fails_table_html(fail_list) -> str:
     return f"""
     <div class="table-wrap fails-wrap">
     <table>
-      <thead><tr><th>Клиент</th><th>ID клиента</th><th>Анкета</th><th>Оператор</th><th>Смена</th><th>Написал в</th><th>Ответ</th><th class="num">Ждал</th></tr></thead>
+      <thead><tr><th>Клиент</th><th>ID клиента</th><th>Анкета</th><th>Тип</th><th>Оператор</th><th>Смена</th><th>Написал в</th><th>Ответ</th><th class="num">Ждал</th></tr></thead>
       <tbody>{"".join(rows)}</tbody>
     </table>
     </div>"""
@@ -402,9 +427,11 @@ def render_report(local_date: datetime, conn):
             overall_total, overall_profiles, overall_clients = total, n_profiles, n_clients
 
     # Одна общая вкладка "Фейлы" на весь день (06:00-06:00 след. дня) -
+    # и по сообщениям, и по задачам (лайки/подмигивания/премиум/лимиты),
     # с фильтром по командам и колонкой смены у каждого фейла.
     day_start, day_end = shift_bounds_utc(local_date, 6, 30)
-    fail_list = compute_fails(conn, day_start, day_end)
+    fail_list = (_normalize_message_fails(compute_fails(conn, day_start, day_end))
+                 + _normalize_task_fails(compute_task_fails(conn, day_start, day_end)))
     panels.append(render_fails_panel(fail_list))
     tab_inputs.append('<input type="radio" name="shift-tab" id="tab-fails">')
     fails_label = "Фейлы" + (f" ⚠{len(fail_list)}" if fail_list else "")

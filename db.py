@@ -37,6 +37,25 @@ CREATE TABLE IF NOT EXISTS messages (
 CREATE INDEX IF NOT EXISTS idx_messages_chat ON messages (tu_id, ru_id, created_date);
 CREATE INDEX IF NOT EXISTS idx_messages_kind ON messages (kind);
 CREATE INDEX IF NOT EXISTS idx_messages_author ON messages (author);
+
+-- "Задачи" с сайта - отдельная категория фейлов: клиент лайкнул/подмигнул,
+-- зашёл премиум-пользователь, открылся новый лимит сообщений - на каждое
+-- есть свой таймер (timer_ms) от сайта, не наш, а официальный.
+CREATE TABLE IF NOT EXISTS tasks (
+    task_id TEXT PRIMARY KEY,
+    tu_id INTEGER NOT NULL,
+    ru_id INTEGER NOT NULL,
+    sub_type TEXT NOT NULL,      -- system (лимит) | likeOrWink | likeOrWinkPaidContact | premiumRuOnline | vipRuOnline
+    status TEXT NOT NULL,        -- todo | done | expired | canceled | cancelByCommunicationBlock | manualClose
+    task_at TEXT NOT NULL,       -- когда возникло
+    updated_at TEXT NOT NULL,    -- когда последний раз менялось (= когда закрыто, если done/expired)
+    timer_ms INTEGER NOT NULL,   -- официальный таймер сайта для этого типа
+    operator_name TEXT,          -- кто реально закрыл (operator.firstName с сайта)
+    content_json TEXT NOT NULL,
+    fetched_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_tasks_chat ON tasks (tu_id, ru_id);
+CREATE INDEX IF NOT EXISTS idx_tasks_at ON tasks (task_at);
 """
 
 
@@ -142,3 +161,25 @@ def insert_messages(conn, rows) -> int:
 
 def message_exists(conn, message_id) -> bool:
     return conn.execute("SELECT 1 FROM messages WHERE message_id = ?", (message_id,)).fetchone() is not None
+
+
+def insert_tasks(conn, rows) -> int:
+    """UPSERT - задача меняет статус со временем (todo -> done/expired/...),
+    повторная докачка должна обновлять, а не игнорировать."""
+    if not rows:
+        return 0
+    before = conn.total_changes
+    conn.executemany(
+        """
+        INSERT INTO tasks
+            (task_id, tu_id, ru_id, sub_type, status, task_at, updated_at, timer_ms, operator_name, content_json)
+        VALUES (:task_id, :tu_id, :ru_id, :sub_type, :status, :task_at, :updated_at, :timer_ms, :operator_name, :content_json)
+        ON CONFLICT(task_id) DO UPDATE SET
+            status = excluded.status,
+            updated_at = excluded.updated_at,
+            operator_name = excluded.operator_name,
+            content_json = excluded.content_json
+        """,
+        rows,
+    )
+    return conn.total_changes - before

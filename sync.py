@@ -19,11 +19,14 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from api import fetch_dialog_list_page, fetch_messages_batch, fetch_ru_profiles, BATCH_SIZE
+from api import (
+    fetch_dialog_list_page, fetch_messages_batch, fetch_ru_profiles, BATCH_SIZE,
+    fetch_tasks_page, TASK_SUB_TYPES,
+)
 from db import (
     get_connection, upsert_chat, get_chat, list_chats,
     update_chat_progress, insert_messages, message_exists,
-    get_state, set_state,
+    get_state, set_state, insert_tasks,
 )
 
 API_DATE_FMT = "%Y-%m-%dT%H:%M:%S.%fZ"
@@ -135,6 +138,49 @@ def discover_chats(sess, conn, full_sweep=False, log=print):
     return new_count, total_seen
 
 
+TASK_PAGE_CAP = 40  # на подтип за прогон - с запасом, объём задач небольшой
+
+
+def _task_to_row(t: dict) -> dict:
+    return {
+        "task_id": str(t["id"]),
+        "tu_id": t["tuId"],
+        "ru_id": t["ruId"],
+        "sub_type": t["subType"],
+        "status": t["status"],
+        "task_at": t["taskAt"],
+        "updated_at": t.get("updatedAt") or t["taskAt"],
+        "timer_ms": t.get("timerMs") or 0,
+        "operator_name": (t.get("operator") or {}).get("firstName"),
+        "content_json": json.dumps(t, ensure_ascii=False),
+    }
+
+
+def discover_tasks(sess, conn, log=print):
+    """Лайки/подмигивания, премиум-онлайн, новые лимиты - отдельная лента
+    задач с сайта. Объём небольшой, поэтому просто перечитываем недавнюю
+    историю по каждому подтипу целиком при каждом прогоне (UPSERT сам
+    подхватит смену статуса todo -> done/expired)."""
+    total_new = 0
+    for sub_type in TASK_SUB_TYPES:
+        cursor = None
+        pages = 0
+        while pages < TASK_PAGE_CAP:
+            pages += 1
+            items, cursor = fetch_tasks_page(sess, sub_types=[sub_type], cursor=cursor, limit=50)
+            if not items:
+                break
+            rows = [_task_to_row(t) for t in items]
+            total_new += insert_tasks(conn, rows)
+            oldest_task_at = items[-1].get("taskAt", "")
+            if oldest_task_at < BACKFILL_CUTOFF or not cursor:
+                break
+            time.sleep(REQUEST_DELAY_SEC)
+        conn.commit()
+    log(f"Задачи (лайки/премиум/лимиты): докачано/обновлено {total_new}")
+    return total_new
+
+
 def enrich_names(sess, conn):
     """Дозаполняет имена клиентов (ru_name) там, где их ещё нет."""
     rows = conn.execute("SELECT tu_id, ru_id FROM chats WHERE ru_name IS NULL").fetchall()
@@ -221,6 +267,7 @@ def run_cycle(sess, conn, log=print, full_sweep=False):
     if new_chats:
         log(f"Обнаружено новых чатов: {new_chats}")
     enrich_names(sess, conn)
+    discover_tasks(sess, conn, log=log)
 
     all_chats = list_chats(conn)
     if full_sweep:
