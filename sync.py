@@ -186,6 +186,43 @@ def discover_tasks(sess, conn, log=print):
     return total_new
 
 
+TASK_VERIFY_PAGE_CAP = 20  # на анкету - точечно, объём по одной анкете небольшой
+
+
+def verify_todo_tasks(sess, conn, log=print):
+    """discover_tasks листает общую ленту ПО ВСЕМ анкетам сразу - если
+    суммарный поток лайков/премиумов большой, конкретная старая задача
+    может уйти за пределы TASK_PAGE_CAP раньше, чем мы увидим её реальный
+    статус (done/expired), и останется в базе навечно как 'todo', хотя на
+    сайте она давно закрыта. Чиним точечно: по каждой анкете, у которой
+    есть незакрытые 'todo'-задачи, перечитываем её личную ленту (объём на
+    одну анкету куда меньше) до самой старой из них - UPSERT подхватит
+    реальный статус."""
+    rows = conn.execute(
+        "SELECT tu_id, MIN(task_at) FROM tasks WHERE status = 'todo' GROUP BY tu_id"
+    ).fetchall()
+    if not rows:
+        return 0
+    total_updated = 0
+    for tu_id, oldest_todo_at in rows:
+        cursor = None
+        pages = 0
+        while pages < TASK_VERIFY_PAGE_CAP:
+            pages += 1
+            items, cursor = fetch_tasks_page(
+                sess, sub_types=TASK_SUB_TYPES, tu_ids=[tu_id], cursor=cursor, limit=50)
+            if not items:
+                break
+            total_updated += insert_tasks(conn, [_task_to_row(t) for t in items])
+            oldest_task_at = items[-1].get("taskAt", "")
+            if oldest_task_at < oldest_todo_at or not cursor:
+                break
+            time.sleep(REQUEST_DELAY_SEC)
+        conn.commit()
+    log(f"Проверка зависших 'todo'-задач: обновлено {total_updated}")
+    return total_updated
+
+
 def enrich_names(sess, conn):
     """Дозаполняет имена клиентов (ru_name) там, где их ещё нет."""
     rows = conn.execute("SELECT tu_id, ru_id FROM chats WHERE ru_name IS NULL").fetchall()
@@ -273,6 +310,7 @@ def run_cycle(sess, conn, log=print, full_sweep=False):
         log(f"Обнаружено новых чатов: {new_chats}")
     enrich_names(sess, conn)
     discover_tasks(sess, conn, log=log)
+    verify_todo_tasks(sess, conn, log=log)
 
     all_chats = list_chats(conn)
     if full_sweep:

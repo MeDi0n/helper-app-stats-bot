@@ -35,10 +35,11 @@ TASK_SUB_TYPES = ["likeOrWink", "likeOrWinkPaidContact", "premiumRuOnline", "vip
 # историю закрытых задач, человеку такой фейл нечем доказать задним числом.
 
 
-def fetch_tasks_page(sess, sub_types=None, cursor=None, limit=50):
+def fetch_tasks_page(sess, sub_types=None, tu_ids=None, cursor=None, limit=50):
     """Одна страница 'задач' (лайки/подмигивания, премиум-онлайн, новые
-    лимиты) - /v1/tasks/list, сортировка от новых к старым (desc)."""
-    item = {"tuIds": [], "limit": limit, "dateOrder": "desc",
+    лимиты) - /v1/tasks/list, сортировка от новых к старым (desc).
+    tu_ids=None (или []) - все анкеты сразу; список - только по ним."""
+    item = {"tuIds": tu_ids or [], "limit": limit, "dateOrder": "desc",
             "subTypes": sub_types or TASK_SUB_TYPES}
     if cursor:
         item["cursor"] = cursor
