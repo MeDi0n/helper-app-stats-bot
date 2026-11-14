@@ -173,6 +173,9 @@ PAGE_TEMPLATE = """<!doctype html>
                                   border: 1px solid var(--border); border-radius: 999px; cursor: pointer;
                                   color: var(--text-secondary); margin: 0 6px 10px 0; }}
 .fails-filter-section > input:checked + label {{ background: var(--text-primary); color: var(--surface-1); }}
+.fails-filter-section > .fails-filter-label {{ display: block; font-size: 12px; font-weight: 600;
+                                                color: var(--text-secondary); margin: 10px 0 6px; }}
+.fails-filter-section > .fails-filter-label:first-of-type {{ margin-top: 0; }}
 {tab_show_rules}
 </style>
 </head>
@@ -224,16 +227,23 @@ SHIFT_PANEL_TEMPLATE = """
 FAILS_PANEL_TEMPLATE = """
 <div class="tab-panel tab-panel-fails">
   <section>
-    <h2>Фейлы <span style="font-weight:400; color:var(--text-secondary); font-size:13px;">(анкета не ответила клиенту за 3+ минуты)</span></h2>
+    <h2>Фейлы <span style="font-weight:400; color:var(--text-secondary); font-size:13px;">(анкета/оператор не успели отреагировать вовремя - у каждого типа свой таймер)</span></h2>
     <div class="tiles">{tiles}</div>
+  </section>
+  <section>
+    <h2>По типам <span style="font-weight:400; color:var(--text-secondary); font-size:12px;">(за что именно фейл)</span></h2>
+    {type_summary}
   </section>
   <section>
     <h2>По командам</h2>
     {team_summary}
   </section>
   <section class="fails-filter-section">
-    <h2>Все фейлы <span style="font-weight:400; color:var(--text-secondary); font-size:12px;">(кто, когда, на какой смене)</span></h2>
+    <h2>Все фейлы <span style="font-weight:400; color:var(--text-secondary); font-size:12px;">(кто, когда, на какой смене, за что)</span></h2>
     <style>{team_filter_css}</style>
+    <span class="fails-filter-label">Тип:</span>
+    {type_filter_inputs}
+    <span class="fails-filter-label">Команда:</span>
     {team_filter_inputs}
     {table}
   </section>
@@ -276,6 +286,7 @@ def _normalize_message_fails(fail_list):
         f = dict(f)
         team = TU_TEAMS.get(f["tu_id"], "?")
         shift_name = _shift_name_for(f["fail_start"])
+        f["type_key"] = "message"
         f["type_label"] = "Сообщение"
         f["operator"] = _operator_for(team, shift_name)
         out.append(f)
@@ -286,6 +297,7 @@ def _normalize_task_fails(fail_list):
     out = []
     for f in fail_list:
         f = dict(f)
+        f["type_key"] = f["sub_type"]
         f["type_label"] = f["sub_type_label"]
         f["operator"] = f["operator_name"]
         out.append(f)
@@ -304,7 +316,7 @@ def fails_table_html(fail_list) -> str:
         status_class = "muted" if f["status"] == "replied_late" else ""
         team = TU_TEAMS.get(f["tu_id"], "?")
         shift_name = _shift_name_for(f["fail_start"])
-        rows.append(f"""<tr class="failrow team-{_team_slug(team)}">
+        rows.append(f"""<tr class="failrow team-{_team_slug(team)} type-{_team_slug(f['type_key'])}">
             <td><a class="row-link" href="{html.escape(chat_href)}">{html.escape(f['ru_name'])}</a></td>
             <td class="muted">{f['ru_id']}</td>
             <td class="muted">{html.escape(TU_NAMES.get(f['tu_id'], str(f['tu_id'])))} ({f['tu_id']})</td>
@@ -349,6 +361,31 @@ def fails_team_summary_html(fail_list) -> str:
     </div>"""
 
 
+def fails_type_summary_html(fail_list) -> str:
+    if not fail_list:
+        return '<p class="empty">Фейлов не найдено.</p>'
+    by_type = defaultdict(lambda: {"count": 0, "unanswered": 0})
+    for f in fail_list:
+        t = by_type[f["type_label"]]
+        t["count"] += 1
+        if f["status"] == "unanswered":
+            t["unanswered"] += 1
+    rows = []
+    for type_label, data in sorted(by_type.items(), key=lambda kv: -kv[1]["count"]):
+        rows.append(f"""<tr>
+            <td>{html.escape(type_label)}</td>
+            <td class="num total">{data['count']}</td>
+            <td class="num">{data['unanswered']}</td>
+        </tr>""")
+    return f"""
+    <div class="table-wrap">
+    <table>
+      <thead><tr><th>Тип</th><th class="num">Фейлов</th><th class="num">Ещё не ответили</th></tr></thead>
+      <tbody>{"".join(rows)}</tbody>
+    </table>
+    </div>"""
+
+
 def render_fails_panel(fail_list):
     tiles = "".join([
         stat_tile(len(fail_list), "Всего фейлов"),
@@ -358,12 +395,19 @@ def render_fails_panel(fail_list):
 
     team_counts = Counter(TU_TEAMS.get(f["tu_id"], "?") for f in fail_list)
     teams_present = sorted(team_counts, key=lambda t: -team_counts[t])
-    filter_inputs = [f'<input type="radio" name="failteam" id="failteam-all" checked>'
-                     f'<label for="failteam-all">Все ({len(fail_list)})</label>']
+    type_counts = Counter(f["type_label"] for f in fail_list)
+    types_present = sorted(type_counts, key=lambda t: -type_counts[t])
+    type_key_by_label = {f["type_label"]: f["type_key"] for f in fail_list}
+
+    team_filter_inputs = [f'<input type="radio" name="failteam" id="failteam-all" checked>'
+                           f'<label for="failteam-all">Все ({len(fail_list)})</label>']
+    type_filter_inputs = [f'<input type="radio" name="failtype" id="failtype-all" checked>'
+                           f'<label for="failtype-all">Все ({len(fail_list)})</label>']
     filter_css_rules = []
+
     for team in teams_present:
         slug = _team_slug(team)
-        filter_inputs.append(
+        team_filter_inputs.append(
             f'<input type="radio" name="failteam" id="failteam-{slug}">'
             f'<label for="failteam-{slug}">&quot;{html.escape(team)}&quot; ({team_counts[team]})</label>'
         )
@@ -372,11 +416,36 @@ def render_fails_panel(fail_list):
             f'#failteam-{slug}:checked ~ .fails-wrap tr.failrow.team-{slug} {{ display: table-row; }}'
         )
 
+    for type_label in types_present:
+        type_slug = _team_slug(type_key_by_label[type_label])
+        type_filter_inputs.append(
+            f'<input type="radio" name="failtype" id="failtype-{type_slug}">'
+            f'<label for="failtype-{type_slug}">{html.escape(type_label)} ({type_counts[type_label]})</label>'
+        )
+        filter_css_rules.append(
+            f'#failtype-{type_slug}:checked ~ .fails-wrap tr.failrow {{ display: none; }}\n'
+            f'#failtype-{type_slug}:checked ~ .fails-wrap tr.failrow.type-{type_slug} {{ display: table-row; }}'
+        )
+
+    # Когда выбраны И команда, И тип одновременно - два фильтра выше просто
+    # "хотя бы один совпал" (ИЛИ), конфликтуют. Добавляем точечные правила
+    # только для реально встречающихся пар команда+тип, чтобы включалось И.
+    # Порядок в селекторе должен совпадать с порядком в HTML: "Тип" идёт
+    # раньше "Команды" на странице, поэтому failtype-X должен быть первым.
+    team_type_pairs = {(_team_slug(TU_TEAMS.get(f["tu_id"], "?")), _team_slug(f["type_key"])) for f in fail_list}
+    for team_slug, type_slug in team_type_pairs:
+        filter_css_rules.append(
+            f'#failtype-{type_slug}:checked ~ #failteam-{team_slug}:checked ~ .fails-wrap tr.failrow {{ display: none; }}\n'
+            f'#failtype-{type_slug}:checked ~ #failteam-{team_slug}:checked ~ .fails-wrap tr.failrow.team-{team_slug}.type-{type_slug} {{ display: table-row; }}'
+        )
+
     return FAILS_PANEL_TEMPLATE.format(
         tiles=tiles,
+        type_summary=fails_type_summary_html(fail_list),
         team_summary=fails_team_summary_html(fail_list),
         team_filter_css="\n".join(filter_css_rules),
-        team_filter_inputs="".join(filter_inputs),
+        team_filter_inputs="".join(team_filter_inputs),
+        type_filter_inputs="".join(type_filter_inputs),
         table=fails_table_html(fail_list),
     )
 
