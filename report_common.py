@@ -92,7 +92,7 @@ CSS_TOKENS = """
     color: var(--text-primary);
     font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
   }
-  .wrap { max-width: 1040px; margin: 0 auto; padding: 32px 20px 64px; }
+  .wrap { max-width: 1400px; margin: 0 auto; padding: 32px 20px 64px; }
   h1 { font-size: 22px; margin: 0 0 4px; }
   .subtitle { color: var(--text-secondary); margin: 0 0 24px; font-size: 14px; }
   .nav { font-size: 13px; margin-bottom: 20px; }
