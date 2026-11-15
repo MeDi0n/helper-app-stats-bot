@@ -186,7 +186,7 @@ def discover_tasks(sess, conn, log=print):
     return total_new
 
 
-TASK_VERIFY_PAGE_CAP = 20  # на анкету - точечно, объём по одной анкете небольшой
+TASK_VERIFY_PAGE_CAP = 30  # на анкету+подтип - точечно, объём небольшой
 
 
 def verify_todo_tasks(sess, conn, log=print):
@@ -195,27 +195,33 @@ def verify_todo_tasks(sess, conn, log=print):
     может уйти за пределы TASK_PAGE_CAP раньше, чем мы увидим её реальный
     статус (done/expired), и останется в базе навечно как 'todo', хотя на
     сайте она давно закрыта. Чиним точечно: по каждой анкете, у которой
-    есть незакрытые 'todo'-задачи, перечитываем её личную ленту (объём на
-    одну анкету куда меньше) до самой старой из них - UPSERT подхватит
-    реальный статус."""
+    есть незакрытые 'todo'-задачи, перечитываем её личную ленту - UPSERT
+    подхватит реальный статус.
+
+    Важно: типы запрашиваем ПО ОДНОМУ, не вперемешку (тот же нюанс, что в
+    discover_tasks). И даже по одному типу страницы с сайта приходят НЕ
+    строго по убыванию даты - сайт, похоже, двигает taskAt у задачи
+    вперёд при каждом новом лайке/подмигивании, прямо во время нашей
+    пагинации, так что "самая старая дата на странице" не надёжный
+    сигнал для досрочной остановки. Поэтому просто листаем целиком до
+    упора курсора или до потолка страниц, без хитрых досрочных выходов."""
     rows = conn.execute(
-        "SELECT tu_id, MIN(task_at) FROM tasks WHERE status = 'todo' GROUP BY tu_id"
+        "SELECT DISTINCT tu_id, sub_type FROM tasks WHERE status = 'todo'"
     ).fetchall()
     if not rows:
         return 0
     total_updated = 0
-    for tu_id, oldest_todo_at in rows:
+    for tu_id, sub_type in rows:
         cursor = None
         pages = 0
         while pages < TASK_VERIFY_PAGE_CAP:
             pages += 1
             items, cursor = fetch_tasks_page(
-                sess, sub_types=TASK_SUB_TYPES, tu_ids=[tu_id], cursor=cursor, limit=50)
+                sess, sub_types=[sub_type], tu_ids=[tu_id], cursor=cursor, limit=50)
             if not items:
                 break
             total_updated += insert_tasks(conn, [_task_to_row(t) for t in items])
-            oldest_task_at = items[-1].get("taskAt", "")
-            if oldest_task_at < oldest_todo_at or not cursor:
+            if not cursor:
                 break
             time.sleep(REQUEST_DELAY_SEC)
         conn.commit()
