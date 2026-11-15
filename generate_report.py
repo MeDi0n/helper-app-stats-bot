@@ -293,13 +293,23 @@ def _normalize_message_fails(fail_list):
     return out
 
 
+def _strip_operator_prefix(name: str) -> str:
+    """Имена операторов в задачах с сайта идут с общим префиксом 'IlonaW'
+    (IlonaWRostik, IlonaWDashaD, ...) - это не разные люди, это просто
+    формат логина. Убираем префикс, чтобы совпадало с именами из
+    сообщений (там просто 'Rostik', 'Dasha', ...)."""
+    if name and name.startswith("IlonaW"):
+        return name[len("IlonaW"):] or name
+    return name
+
+
 def _normalize_task_fails(fail_list):
     out = []
     for f in fail_list:
         f = dict(f)
         f["type_key"] = f["sub_type"]
         f["type_label"] = f["sub_type_label"]
-        f["operator"] = f["operator_name"]
+        f["operator"] = _strip_operator_prefix(f["operator_name"])
         out.append(f)
     return out
 
