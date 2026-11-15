@@ -10,12 +10,15 @@
 
 canceled / cancelByCommunicationBlock - ситуация сама отпала или клиент
 заблокировал анкету, это не вина оператора, не фейл.
+
+ghost - запись о задаче, которую сайт полностью удалил из своей ленты
+(подробности в sync.py:verify_todo_tasks) - доказать нечем, не фейл.
 """
 from datetime import datetime, timezone
 
 API_DATE_FMT = "%Y-%m-%dT%H:%M:%S.%fZ"
 
-SKIP_STATUSES = {"canceled", "cancelByCommunicationBlock"}
+SKIP_STATUSES = {"canceled", "cancelByCommunicationBlock", "ghost"}
 SKIP_SUB_TYPES = {"system"}
 
 SUB_TYPE_LABELS = {

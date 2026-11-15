@@ -187,6 +187,7 @@ def discover_tasks(sess, conn, log=print):
 
 
 TASK_VERIFY_PAGE_CAP = 30  # на анкету+подтип - точечно, объём небольшой
+GHOST_GRACE_MIN = 20  # мин. возраст task_at, прежде чем считать задачу "призраком"
 
 
 def verify_todo_tasks(sess, conn, log=print):
@@ -204,14 +205,35 @@ def verify_todo_tasks(sess, conn, log=print):
     вперёд при каждом новом лайке/подмигивании, прямо во время нашей
     пагинации, так что "самая старая дата на странице" не надёжный
     сигнал для досрочной остановки. Поэтому просто листаем целиком до
-    упора курсора или до потолка страниц, без хитрых досрочных выходов."""
+    упора курсора или до потолка страниц, без хитрых досрочных выходов.
+
+    Другой случай (см. разбор Fireguy/Dietsy, 15.11.2026): бывает, что
+    сайт полностью УДАЛЯЕТ запись о задаче из своей ленты (похоже, у
+    платных лайков это бывает при отмене/возврате платежа) - тогда даже
+    полный честный пересмотр ленты анкеты+подтипа её не находит, и это
+    не "не успели долистать", а подтверждённое "сайт её больше не
+    хранит". Доказать такую задачу нечем (как и "новые лимиты" - см.
+    SKIP_SUB_TYPES в task_fails.py), поэтому если локальная 'todo'-задача
+    не встретилась ни разу в полном пересмотре её собственной
+    анкеты+подтипа - помечаем её статусом 'ghost', чтобы не висела вечным
+    фейлом. GHOST_GRACE_MIN - запас на случай, если сайт просто не успел
+    проиндексировать совсем свежую задачу."""
     rows = conn.execute(
         "SELECT DISTINCT tu_id, sub_type FROM tasks WHERE status = 'todo'"
     ).fetchall()
     if not rows:
         return 0
     total_updated = 0
+    total_ghosted = 0
+    now = datetime.now(timezone.utc)
     for tu_id, sub_type in rows:
+        local_todo_ids = {
+            row[0] for row in conn.execute(
+                "SELECT task_id FROM tasks WHERE tu_id = ? AND sub_type = ? AND status = 'todo'",
+                (tu_id, sub_type),
+            ).fetchall()
+        }
+        seen_ids = set()
         cursor = None
         pages = 0
         while pages < TASK_VERIFY_PAGE_CAP:
@@ -220,12 +242,32 @@ def verify_todo_tasks(sess, conn, log=print):
                 sess, sub_types=[sub_type], tu_ids=[tu_id], cursor=cursor, limit=50)
             if not items:
                 break
+            seen_ids.update(str(t["id"]) for t in items)
             total_updated += insert_tasks(conn, [_task_to_row(t) for t in items])
             if not cursor:
                 break
             time.sleep(REQUEST_DELAY_SEC)
+
+        missing_ids = local_todo_ids - seen_ids
+        if missing_ids:
+            ghost_ids = []
+            for task_id in missing_ids:
+                task_at = conn.execute(
+                    "SELECT task_at FROM tasks WHERE task_id = ?", (task_id,)
+                ).fetchone()[0]
+                age_min = (now - datetime.strptime(task_at, API_DATE_FMT).replace(
+                    tzinfo=timezone.utc)).total_seconds() / 60
+                if age_min >= GHOST_GRACE_MIN:
+                    ghost_ids.append(task_id)
+            if ghost_ids:
+                conn.executemany(
+                    "UPDATE tasks SET status = 'ghost' WHERE task_id = ?",
+                    [(tid,) for tid in ghost_ids],
+                )
+                total_ghosted += len(ghost_ids)
         conn.commit()
-    log(f"Проверка зависших 'todo'-задач: обновлено {total_updated}")
+    log(f"Проверка зависших 'todo'-задач: обновлено {total_updated}"
+        + (f", помечено 'призраком' (сайт удалил запись) {total_ghosted}" if total_ghosted else ""))
     return total_updated
 
 
