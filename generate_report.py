@@ -293,23 +293,20 @@ def _normalize_message_fails(fail_list):
     return out
 
 
-def _strip_operator_prefix(name: str) -> str:
-    """Имена операторов в задачах с сайта идут с общим префиксом 'IlonaW'
-    (IlonaWRostik, IlonaWDashaD, ...) - это не разные люди, это просто
-    формат логина. Убираем префикс, чтобы совпадало с именами из
-    сообщений (там просто 'Rostik', 'Dasha', ...)."""
-    if name and name.startswith("IlonaW"):
-        return name[len("IlonaW"):] or name
-    return name
-
-
 def _normalize_task_fails(fail_list):
+    """Поле 'оператор' у задач с сайта (лайки/премиум) - это фиксированный
+    владелец анкеты, не привязан к реальной смене (может быть одно и то
+    же имя 24 часа в сутки). Для ответственности по факту нам нужно, кто
+    ВЕДЁТ смену сейчас - берём по той же схеме команда+смена, что и для
+    фейлов по сообщениям, а не сырое поле с сайта."""
     out = []
     for f in fail_list:
         f = dict(f)
+        team = TU_TEAMS.get(f["tu_id"], "?")
+        shift_name = _shift_name_for(f["fail_start"])
         f["type_key"] = f["sub_type"]
         f["type_label"] = f["sub_type_label"]
-        f["operator"] = _strip_operator_prefix(f["operator_name"])
+        f["operator"] = _operator_for(team, shift_name)
         out.append(f)
     return out
 
