@@ -21,8 +21,9 @@ from pathlib import Path
 
 from api import (
     fetch_dialog_list_page, fetch_messages_batch, fetch_ru_profiles, BATCH_SIZE,
-    fetch_tasks_page, TASK_SUB_TYPES,
+    fetch_tasks_page, TASK_SUB_TYPES, TrustedUserUnavailable,
 )
+from config import TU_IDS
 from db import (
     get_connection, upsert_chat, get_chat, list_chats,
     update_chat_progress, insert_messages, message_exists,
@@ -106,10 +107,24 @@ def discover_chats(sess, conn, full_sweep=False, log=print):
     cursor = None
     pages = 0
     MAX_PAGES = 5000  # защита от зацикливания
+    working_tu_ids = list(TU_IDS)  # локальная копия - урезаем, если какая-то анкета отвалилась
 
     while pages < MAX_PAGES:
         pages += 1
-        items, cursor = fetch_dialog_list_page(sess, cursor)
+        try:
+            items, cursor = fetch_dialog_list_page(sess, cursor, tu_ids=working_tu_ids)
+        except TrustedUserUnavailable as e:
+            if e.tu_id not in working_tu_ids:
+                raise  # защита от зацикливания, если сайт вернёт тот же id повторно
+            working_tu_ids = [t for t in working_tu_ids if t != e.tu_id]
+            log(f"  анкета {e.tu_id} недоступна аккаунту - пропускаю её в этом прогоне "
+                f"(нужно обновить TU_IDS через refresh_config.py)")
+            if not working_tu_ids:
+                # пустой tuIds у сайта значит "все анкеты вообще", а не "ни одной" -
+                # лучше явно упасть, чем молча утащить чужие анкеты в базу
+                raise RuntimeError("Все анкеты из TU_IDS недоступны - проверь refresh_config.py")
+            pages -= 1  # эта страница не считается - просто повторяем запрос без неё
+            continue
         if not items:
             break
         for d in items:

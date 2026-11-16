@@ -12,7 +12,9 @@ from auth import build_session, prolong, login
 from db import get_connection
 from sync import run_cycle
 from verify_fails import verify_and_patch_for_date
+from config import TU_IDS as _OLD_TU_IDS
 import refresh_teams
+import refresh_config
 
 
 def main():
@@ -46,6 +48,16 @@ def main():
         before, after, patched = verify_and_patch_for_date(sess, conn, day, log=print)
         if patched:
             print(f"  {day.strftime('%d.%m')}: {before} -> {after} фейлов, довставлено {patched} сообщений")
+
+    print("\nОбновляю список анкет (TU_IDS/TU_NAMES)...")
+    trusted_users = refresh_config.fetch_trusted_users(sess)
+    new_tu_ids = {u["tuId"] for u in trusted_users}
+    if new_tu_ids != set(_OLD_TU_IDS):
+        refresh_config.main()
+        print(f"  список анкет изменился (было {len(_OLD_TU_IDS)}, стало {len(new_tu_ids)}) - "
+              f"config.py обновлён, подхватится со следующего прогона")
+    else:
+        print(f"  без изменений, {len(new_tu_ids)} анкет")
 
     print("\nОбновляю команды/кабинеты...")
     cabinets = refresh_teams.fetch_cabinets(sess)
