@@ -154,6 +154,7 @@ def _task_to_row(t: dict) -> dict:
         "sub_type": t["subType"],
         "status": t["status"],
         "task_at": t["taskAt"],
+        "created_at": t.get("createdAt") or t["taskAt"],
         "updated_at": t.get("updatedAt") or t["taskAt"],
         "timer_ms": t.get("timerMs") or 0,
         "operator_name": (t.get("operator") or {}).get("firstName"),
@@ -252,10 +253,11 @@ def verify_todo_tasks(sess, conn, log=print):
         if missing_ids:
             ghost_ids = []
             for task_id in missing_ids:
-                task_at = conn.execute(
-                    "SELECT task_at FROM tasks WHERE task_id = ?", (task_id,)
-                ).fetchone()[0]
-                age_min = (now - datetime.strptime(task_at, API_DATE_FMT).replace(
+                row = conn.execute(
+                    "SELECT COALESCE(created_at, task_at) FROM tasks WHERE task_id = ?", (task_id,)
+                ).fetchone()
+                created_at = row[0]
+                age_min = (now - datetime.strptime(created_at, API_DATE_FMT).replace(
                     tzinfo=timezone.utc)).total_seconds() / 60
                 if age_min >= GHOST_GRACE_MIN:
                     ghost_ids.append(task_id)

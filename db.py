@@ -47,7 +47,10 @@ CREATE TABLE IF NOT EXISTS tasks (
     ru_id INTEGER NOT NULL,
     sub_type TEXT NOT NULL,      -- system (лимит) | likeOrWink | likeOrWinkPaidContact | premiumRuOnline | vipRuOnline
     status TEXT NOT NULL,        -- todo | done | expired | canceled | cancelByCommunicationBlock | manualClose
-    task_at TEXT NOT NULL,       -- когда возникло
+    task_at TEXT NOT NULL,       -- когда возникло исходное действие клиента (taskAt с сайта) - НЕ брать за точку
+                                  -- отсчёта таймера: бывает отстаёт от created_at на сутки (см. created_at)
+    created_at TEXT,             -- когда сайт реально создал саму задачу (createdAt) - настоящая точка
+                                  -- отсчёта для таймера оператора, см. разбор gsaboats/Baubel/Fred 16.11.2026
     updated_at TEXT NOT NULL,    -- когда последний раз менялось (= когда закрыто, если done/expired)
     timer_ms INTEGER NOT NULL,   -- официальный таймер сайта для этого типа
     operator_name TEXT,          -- кто реально закрыл (operator.firstName с сайта)
@@ -66,6 +69,10 @@ def get_connection():
     existing_cols = {row[1] for row in conn.execute("PRAGMA table_info(chats)")}
     if "blocked" not in existing_cols:
         conn.execute("ALTER TABLE chats ADD COLUMN blocked INTEGER NOT NULL DEFAULT 0")
+        conn.commit()
+    task_cols = {row[1] for row in conn.execute("PRAGMA table_info(tasks)")}
+    if "created_at" not in task_cols:
+        conn.execute("ALTER TABLE tasks ADD COLUMN created_at TEXT")
         conn.commit()
     return conn
 
@@ -172,10 +179,11 @@ def insert_tasks(conn, rows) -> int:
     conn.executemany(
         """
         INSERT INTO tasks
-            (task_id, tu_id, ru_id, sub_type, status, task_at, updated_at, timer_ms, operator_name, content_json)
-        VALUES (:task_id, :tu_id, :ru_id, :sub_type, :status, :task_at, :updated_at, :timer_ms, :operator_name, :content_json)
+            (task_id, tu_id, ru_id, sub_type, status, task_at, created_at, updated_at, timer_ms, operator_name, content_json)
+        VALUES (:task_id, :tu_id, :ru_id, :sub_type, :status, :task_at, :created_at, :updated_at, :timer_ms, :operator_name, :content_json)
         ON CONFLICT(task_id) DO UPDATE SET
             status = excluded.status,
+            created_at = COALESCE(excluded.created_at, tasks.created_at),
             updated_at = excluded.updated_at,
             operator_name = excluded.operator_name,
             content_json = excluded.content_json
