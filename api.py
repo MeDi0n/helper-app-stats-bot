@@ -73,13 +73,30 @@ def fetch_tasks_page(sess, sub_types=None, tu_ids=None, cursor=None, limit=50):
     return d.get("items", []), d.get("nextCursor")
 
 
+_EMPTY_MESSAGES_RESULT = {"data": {"items": [], "nextCursor": None}}
+
+
 def fetch_messages_batch(sess, pairs):
     """pairs: список dict {tuId, ruId, limit, cursor(опц.)}.
-    Возвращает список результатов (по одному на пару), в том же порядке."""
+    Возвращает список результатов (по одному на пару), в том же порядке,
+    длина всегда равна len(pairs).
+
+    Если среди пар есть недоступная аккаунту анкета (см. TrustedUserUnavailable
+    в fetch_dialog_list_page), сайт не роняет весь batch, а возвращает
+    результаты по остальным парам + отдельный errors[] с индексами плохих -
+    но индексы в results при этом не совпадают с позицией в pairs (плохие
+    просто выпадают). Докладываем их пустым результатом (как будто у чата
+    нет новых сообщений), а не падаем - эту анкету чинить нечем, кроме как
+    дождаться, пока refresh_config.py уберёт её из TU_IDS."""
     if not pairs:
         return []
     body = {"items": pairs}
     r = sess.post(f"{BASE}/chat/messages", json=body, timeout=30)
     r.raise_for_status()
     data = r.json()
-    return data.get("results", [])
+    out = [_EMPTY_MESSAGES_RESULT] * len(pairs)
+    for res in data.get("results", []):
+        idx = res.get("index")
+        if idx is not None and 0 <= idx < len(pairs):
+            out[idx] = res
+    return out
