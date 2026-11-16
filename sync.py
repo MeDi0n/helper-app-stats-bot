@@ -319,10 +319,15 @@ def _deep_paginate(sess, conn, tu_id, ru_id, ru_name, cursor) -> int:
         msgs = data.get("items", [])
         if not msgs:
             break
+        oldest = min(msgs, key=lambda m: m["createdAt"])
+        # проверяем ДО вставки - иначе oldest "уже существует" просто
+        # потому, что мы его только что сами вставили в этой же
+        # незакоммиченной транзакции (см. разбор 16.11.2026), и цикл
+        # всегда вставал бы после первой же страницы
+        already_known = message_exists(conn, str(oldest["id"]))
         rows = [_message_to_row(m, tu_id, ru_id, ru_name) for m in msgs if m["createdAt"] >= BACKFILL_CUTOFF]
         total_new += insert_messages(conn, rows)
-        oldest = min(msgs, key=lambda m: m["createdAt"])
-        if message_exists(conn, str(oldest["id"])) or oldest["createdAt"] < BACKFILL_CUTOFF:
+        if already_known or oldest["createdAt"] < BACKFILL_CUTOFF:
             break
         cursor = data.get("nextCursor")
     return total_new

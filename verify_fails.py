@@ -12,7 +12,7 @@ import time
 
 from auth import build_session
 from api import fetch_messages_batch
-from db import get_connection, insert_messages
+from db import get_connection, insert_messages, message_exists
 from sync import _message_to_row, BACKFILL_CUTOFF, REQUEST_DELAY_SEC
 from fails import compute_fails
 from report_common import shift_bounds_utc
@@ -20,6 +20,14 @@ from datetime import datetime, timedelta
 
 
 def patch_pair(sess, conn, tu_id: int, ru_id: int, ru_name) -> int:
+    """Раньше листала ВСЕГДА до BACKFILL_CUTOFF или потолка страниц, не
+    проверяя, что уже есть в базе - для пары с большим объёмом сообщений
+    это значило полную передокачку (до 900 сообщений) КАЖДЫЙ прогон
+    крона, пока фейл по этой паре не закроется, хотя дыра уже давно
+    залатана (видели 16.11.2026 - одни и те же пары с одинаковым числом
+    "докачано" из цикла в цикл, из-за чего прогон растягивался на
+    5-10+ минут). Теперь, как и _deep_paginate в sync.py, останавливаемся,
+    как только дошли до уже известного сообщения - дыры дальше нет."""
     cursor = None
     total_new = 0
     pages = 0
@@ -33,10 +41,15 @@ def patch_pair(sess, conn, tu_id: int, ru_id: int, ru_name) -> int:
         msgs = data.get("items", [])
         if not msgs:
             break
+        oldest = min(msgs, key=lambda m: m["createdAt"])
+        # проверяем ДО вставки этой страницы - иначе oldest "существует" же
+        # просто потому, что мы его только что сами вставили (SQLite видит
+        # свою же незакоммиченную запись), и цикл всегда вставал бы после
+        # первой страницы
+        already_known = message_exists(conn, str(oldest["id"]))
         rows = [_message_to_row(m, tu_id, ru_id, ru_name) for m in msgs if m["createdAt"] >= BACKFILL_CUTOFF]
         total_new += insert_messages(conn, rows)
-        oldest = min(msgs, key=lambda m: m["createdAt"])
-        if oldest["createdAt"] < BACKFILL_CUTOFF:
+        if already_known or oldest["createdAt"] < BACKFILL_CUTOFF:
             break
         cursor = data.get("nextCursor")
         if not cursor:
