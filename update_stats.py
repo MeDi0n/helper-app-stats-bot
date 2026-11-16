@@ -3,8 +3,11 @@
 `python update_stats.py`: подтягивает всё новое, продлевает сессию,
 пересобирает отчёты за вчера/сегодня (условные сутки 06:00-06:00).
 """
+import os
 import sys
+import time
 from datetime import datetime, timedelta
+from pathlib import Path
 
 import requests
 
@@ -15,6 +18,34 @@ from verify_fails import verify_and_patch_for_date
 from config import TU_IDS as _OLD_TU_IDS
 import refresh_teams
 import refresh_config
+
+LOCK_PATH = Path(__file__).parent / "update_stats.lock"
+LOCK_STALE_SEC = 20 * 60  # дольше любого нормального прогона - если лок старше, прошлый запуск упал без очистки
+
+
+def _acquire_lock():
+    """Крон раз в 5 мин + ручные перезапуски во время отладки иногда
+    накладываются друг на друга и дерутся за один sqlite-файл ("database is
+    locked", см. разбор 16.11.2026). Простой файл-лок вместо гонки -
+    второй запуск просто тихо выходит, а не падает с ошибкой."""
+    try:
+        fd = os.open(LOCK_PATH, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        os.write(fd, str(os.getpid()).encode())
+        os.close(fd)
+        return True
+    except FileExistsError:
+        try:
+            age = time.time() - LOCK_PATH.stat().st_mtime
+        except FileNotFoundError:
+            return _acquire_lock()  # лок пропал между проверками - повторить
+        if age > LOCK_STALE_SEC:
+            LOCK_PATH.unlink(missing_ok=True)
+            return _acquire_lock()
+        return False
+
+
+def _release_lock():
+    LOCK_PATH.unlink(missing_ok=True)
 
 
 def main():
@@ -77,4 +108,10 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    if not _acquire_lock():
+        print("Другой прогон update_stats.py уже идёт - пропускаю, чтобы не драться за базу.")
+        sys.exit(0)
+    try:
+        main()
+    finally:
+        _release_lock()

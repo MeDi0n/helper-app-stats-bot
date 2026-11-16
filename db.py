@@ -65,6 +65,10 @@ CREATE INDEX IF NOT EXISTS idx_tasks_at ON tasks (task_at);
 def get_connection():
     conn = sqlite3.connect(DB_PATH, timeout=30)
     conn.execute("PRAGMA busy_timeout = 30000")
+    # WAL - читатели (отчёты) не блокируют писателя и наоборот, вместо
+    # эксклюзивной блокировки всего файла на время записи (см. "database is
+    # locked" при наложении ручного прогона на крон, 16.11.2026)
+    conn.execute("PRAGMA journal_mode = WAL")
     conn.executescript(SCHEMA)
     existing_cols = {row[1] for row in conn.execute("PRAGMA table_info(chats)")}
     if "blocked" not in existing_cols:
