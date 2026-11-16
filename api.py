@@ -1,7 +1,26 @@
+import time
+
+import requests
+
 from config import TU_IDS
 
 BASE = "https://api.helper-app.com/v1"
 BATCH_SIZE = 25  # сколько чатов тянуть за один POST к chat/messages
+
+
+def _post(sess, url, json_body, timeout=30, retries=2, backoff=3):
+    """sess.post с ретраями на сетевые сбои (таймаут/обрыв) - один
+    "зависший" запрос к сайту иначе роняет весь update_stats.py (см.
+    разбор 16.11.2026 - ReadTimeout на /tasks/list посреди прогона)."""
+    last_exc = None
+    for attempt in range(retries + 1):
+        try:
+            return sess.post(url, json=json_body, timeout=timeout)
+        except requests.exceptions.RequestException as e:
+            last_exc = e
+            if attempt < retries:
+                time.sleep(backoff * (attempt + 1))
+    raise last_exc
 
 
 class TrustedUserUnavailable(Exception):
@@ -24,7 +43,7 @@ def fetch_dialog_list_page(sess, cursor=None, tu_ids=None):
     item = {"tuIds": tu_ids if tu_ids is not None else TU_IDS, "filter": "all", "channels": ["chat"]}
     if cursor:
         item["cursor"] = cursor
-    r = sess.post(f"{BASE}/communication/list", json={"items": [item]}, timeout=30)
+    r = _post(sess, f"{BASE}/communication/list", {"items": [item]})
     r.raise_for_status()
     data = r.json()
     errors = data.get("errors")
@@ -45,7 +64,7 @@ def fetch_ru_profiles(sess, pairs):
     data.name и т.д. - для подписи имени клиента."""
     if not pairs:
         return []
-    r = sess.post(f"{BASE}/ru/profiles", json={"items": pairs}, timeout=30)
+    r = _post(sess, f"{BASE}/ru/profiles", {"items": pairs})
     r.raise_for_status()
     return r.json().get("results", [])
 
@@ -63,7 +82,7 @@ def fetch_tasks_page(sess, sub_types=None, tu_ids=None, cursor=None, limit=50):
             "subTypes": sub_types or TASK_SUB_TYPES}
     if cursor:
         item["cursor"] = cursor
-    r = sess.post(f"{BASE}/tasks/list", json={"items": [item]}, timeout=30)
+    r = _post(sess, f"{BASE}/tasks/list", {"items": [item]})
     r.raise_for_status()
     data = r.json()
     results = data.get("results", [])
@@ -90,8 +109,7 @@ def fetch_messages_batch(sess, pairs):
     дождаться, пока refresh_config.py уберёт её из TU_IDS."""
     if not pairs:
         return []
-    body = {"items": pairs}
-    r = sess.post(f"{BASE}/chat/messages", json=body, timeout=30)
+    r = _post(sess, f"{BASE}/chat/messages", {"items": pairs})
     r.raise_for_status()
     data = r.json()
     out = [_EMPTY_MESSAGES_RESULT] * len(pairs)
